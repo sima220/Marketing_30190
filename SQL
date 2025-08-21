@@ -1,0 +1,42 @@
+-- Campaigns Table
+CREATE TABLE campaigns (
+    campaign_id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    budget NUMERIC NOT NULL,
+    start_date DATE,
+    end_date DATE,
+    description TEXT
+);
+
+-- Channels Table
+CREATE TABLE channels (
+    channel_id SERIAL PRIMARY KEY,
+    campaign_id INTEGER REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+    type VARCHAR(50) NOT NULL
+);
+
+-- Customers Table
+CREATE TABLE customers (
+    customer_id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    region VARCHAR(100),
+    purchase_date DATE
+);
+
+-- Segments Table
+CREATE TABLE segments (
+    segment_id SERIAL PRIMARY KEY,
+    name VARCHAR(255) UNIQUE NOT NULL,
+    criteria TEXT NOT NULL
+);
+
+-- Campaign Performance Table
+CREATE TABLE campaign_performance (
+    performance_id SERIAL PRIMARY KEY,
+    campaign_id INTEGER REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+    emails_sent INTEGER,
+    emails_opened INTEGER,
+    clicks INTEGER,
+    date_recorded DATE NOT NULL
+);
