@@ -1,0 +1,224 @@
+import streamlit as st
+import pandas as pd
+from datetime import date
+from backend_application import (
+    setup_database,
+    create_campaign,
+    get_all_campaigns,
+    update_campaign,
+    delete_campaign,
+    create_customer,
+    get_all_customers,
+    create_segment,
+    get_all_segments,
+    get_customers_in_segment,
+    log_performance_data,
+    get_campaign_performance,
+    get_business_insights
+)
+
+# Initialize database
+setup_database()
+
+st.set_page_config(
+    page_title="Marketing Campaign Manager",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- Main App ---
+st.title("📊 Marketing Campaign Manager(Sima 30190)")
+
+# Sidebar navigation
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", [
+    "Dashboard",
+    "Campaigns",
+    "Customers & Segments",
+    "Performance Tracking",
+    "Email Communication"
+])
+
+# --- Dashboard Page ---
+if page == "Dashboard":
+    st.header("Real-Time Dashboard")
+    insights = get_business_insights()
+
+    if insights:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Campaigns", insights.get('total_campaigns', 0))
+        with col2:
+            st.metric("Total Customers", insights.get('total_customers', 0))
+        with col3:
+            st.metric("Total Emails Sent", insights.get('total_emails_sent', 0))
+        with col4:
+            st.metric("Average Open Rate", f"{insights.get('avg_open_rate', 0) * 100:.2f}%")
+
+        st.subheader("Top Performing Campaigns")
+        st.info(f"Most Successful Campaign: **{insights.get('most_successful_campaign', 'N/A')}** with **{insights.get('most_successful_campaign_clicks', 0)}** Clicks.")
+
+    else:
+        st.info("No data available. Please add some campaigns and customers.")
+    
+    # Campaign Performance over time (for a selected campaign)
+    st.subheader("Campaign Performance Over Time")
+    campaigns_df = get_all_campaigns()
+    if not campaigns_df.empty:
+        campaign_list = campaigns_df.set_index('campaign_id')['name'].to_dict()
+        selected_campaign_id = st.selectbox("Select a Campaign to View Performance:", list(campaign_list.keys()), format_func=lambda x: campaign_list[x])
+        
+        if selected_campaign_id:
+            performance_df = get_campaign_performance(selected_campaign_id)
+            if not performance_df.empty:
+                st.line_chart(performance_df.set_index('date_recorded')[['emails_sent', 'emails_opened', 'clicks']])
+                st.dataframe(performance_df)
+            else:
+                st.warning("No performance data logged for this campaign yet.")
+    else:
+        st.warning("Please create a campaign to view its performance.")
+
+# --- Campaigns Page ---
+elif page == "Campaigns":
+    st.header("Campaign Management")
+    
+    tab1, tab2 = st.tabs(["Create New Campaign", "View & Manage Campaigns"])
+    
+    with tab1:
+        st.subheader("Create New Marketing Campaign")
+        with st.form("new_campaign_form"):
+            campaign_name = st.text_input("Campaign Name", max_chars=255)
+            budget = st.number_input("Budget ($)", min_value=0.0, format="%.2f")
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("Start Date", value=date.today())
+            with col2:
+                end_date = st.date_input("End Date", value=date.today())
+            description = st.text_area("Description")
+            channels = st.multiselect("Marketing Channels", ["Email", "Social Media", "Paid Ads", "SMS"])
+            
+            submit_button = st.form_submit_button("Create Campaign")
+            if submit_button:
+                if campaign_name and channels:
+                    create_campaign(campaign_name, budget, start_date, end_date, description, channels)
+                    st.success("Campaign created successfully!")
+                    st.rerun()
+                else:
+                    st.error("Please fill out all required fields.")
+    
+    with tab2:
+        st.subheader("Current Campaigns")
+        campaigns_df = get_all_campaigns()
+        if not campaigns_df.empty:
+            st.dataframe(campaigns_df, use_container_width=True)
+            
+            st.subheader("Update or Delete a Campaign")
+            campaign_list = campaigns_df.set_index('campaign_id')['name'].to_dict()
+            selected_campaign_id = st.selectbox("Select Campaign to Manage:", list(campaign_list.keys()), format_func=lambda x: campaign_list[x])
+            
+            if selected_campaign_id:
+                # Get selected campaign details for pre-filling the form
+                selected_row = campaigns_df[campaigns_df['campaign_id'] == selected_campaign_id].iloc[0]
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    if st.button("Update Campaign Details"):
+                        # In a real app, this would be a full form with pre-filled data
+                        st.info("Update functionality would be implemented here.")
+                with col2:
+                    if st.button("Delete Campaign"):
+                        delete_campaign(selected_campaign_id)
+                        st.success("Campaign deleted successfully!")
+                        st.rerun()
+        else:
+            st.info("No campaigns created yet.")
+
+# --- Customers & Segments Page ---
+elif page == "Customers & Segments":
+    st.header("Customer & Segmentation Management")
+    
+    tab1, tab2, tab3 = st.tabs(["Add Customer", "Create Segment", "View All"])
+    
+    with tab1:
+        st.subheader("Add a New Customer")
+        with st.form("new_customer_form"):
+            name = st.text_input("Name")
+            email = st.text_input("Email")
+            region = st.text_input("Region")
+            purchase_date = st.date_input("Last Purchase Date", value=None)
+            submit_customer = st.form_submit_button("Add Customer")
+            if submit_customer:
+                if name and email:
+                    create_customer(name, email, region, purchase_date)
+                    st.success("Customer added successfully!")
+                    st.rerun()
+                else:
+                    st.error("Name and Email are required.")
+
+    with tab2:
+        st.subheader("Create a Dynamic Segment")
+        with st.form("new_segment_form"):
+            segment_name = st.text_input("Segment Name")
+            st.info("Use JSON to define criteria. E.g., `{\"region\": \"North America\", \"has_purchased_in_last_months\": 6}`")
+            criteria_json = st.text_area("Segment Criteria (JSON)", height=150)
+            submit_segment = st.form_submit_button("Create Segment")
+            if submit_segment:
+                try:
+                    criteria = json.loads(criteria_json)
+                    create_segment(segment_name, criteria)
+                    st.success("Segment created successfully!")
+                    st.rerun()
+                except json.JSONDecodeError:
+                    st.error("Invalid JSON format. Please check your criteria.")
+
+    with tab3:
+        st.subheader("All Customers")
+        customers_df = get_all_customers()
+        st.dataframe(customers_df, use_container_width=True)
+        
+        st.subheader("All Segments")
+        segments_df = get_all_segments()
+        st.dataframe(segments_df, use_container_width=True)
+
+# --- Performance Tracking Page ---
+elif page == "Performance Tracking":
+    st.header("Log Campaign Performance")
+    
+    campaigns_df = get_all_campaigns()
+    if not campaigns_df.empty:
+        campaign_list = campaigns_df.set_index('campaign_id')['name'].to_dict()
+        with st.form("log_performance_form"):
+            selected_campaign_id = st.selectbox("Select a Campaign:", list(campaign_list.keys()), format_func=lambda x: campaign_list[x])
+            emails_sent = st.number_input("Emails Sent", min_value=0)
+            emails_opened = st.number_input("Emails Opened", min_value=0)
+            clicks = st.number_input("Clicks", min_value=0)
+            
+            submit_performance = st.form_submit_button("Log Performance Data")
+            if submit_performance:
+                log_performance_data(selected_campaign_id, emails_sent, emails_opened, clicks)
+                st.success("Performance data logged successfully!")
+                st.rerun()
+    else:
+        st.warning("Please create a campaign first to log performance data.")
+
+# --- Email Communication Page ---
+elif page == "Email Communication":
+    st.header("Schedule & Send Emails")
+    
+    segments_df = get_all_segments()
+    if not segments_df.empty:
+        segment_list = segments_df.set_index('segment_id')['name'].to_dict()
+        selected_segment_id = st.selectbox("Select a Customer Segment:", list(segment_list.keys()), format_func=lambda x: segment_list[x])
+        
+        selected_criteria = segments_df[segments_df['segment_id'] == selected_segment_id]['criteria'].iloc[0]
+        st.write("Criteria for this segment:", selected_criteria)
+        
+        if st.button("Simulate Email Send"):
+            customers_in_segment = get_customers_in_segment(selected_criteria)
+            if not customers_in_segment.empty:
+                st.success(f"Simulated sending emails to {len(customers_in_segment)} customers in the '{segment_list[selected_segment_id]}' segment.")
+                st.dataframe(customers_in_segment)
+            else:
+                st.warning("No customers found for this segment.")
+    else:
+        st.info("Please create a customer segment first.")
