@@ -1,0 +1,354 @@
+import psycopg2
+import pandas as pd
+from datetime import datetime
+import json
+
+# Database connection parameters
+DB_PARAMS = {
+    "host": "localhost",
+    "database": "marketing_app_db",
+    "user": "postgres",
+    "password": "seemaxime@30190"
+}
+
+def get_db_connection():
+    """Establishes and returns a new database connection."""
+    try:
+        conn = psycopg2.connect(**DB_PARAMS)
+        return conn
+    except psycopg2.Error as e:
+        print(f"Database connection failed: {e}")
+        return None
+
+# --- DATABASE SETUP ---
+
+def setup_database():
+    """Creates the necessary tables if they do not exist."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return False
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS campaigns (
+                campaign_id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                budget NUMERIC NOT NULL,
+                start_date DATE,
+                end_date DATE,
+                description TEXT
+            );
+            CREATE TABLE IF NOT EXISTS channels (
+                channel_id SERIAL PRIMARY KEY,
+                campaign_id INTEGER REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+                type VARCHAR(50) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS customers (
+                customer_id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                region VARCHAR(100),
+                purchase_date DATE
+            );
+            CREATE TABLE IF NOT EXISTS segments (
+                segment_id SERIAL PRIMARY KEY,
+                name VARCHAR(255) UNIQUE NOT NULL,
+                criteria TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS campaign_performance (
+                performance_id SERIAL PRIMARY KEY,
+                campaign_id INTEGER REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+                emails_sent INTEGER,
+                emails_opened INTEGER,
+                clicks INTEGER,
+                date_recorded DATE NOT NULL
+            );
+        """)
+        conn.commit()
+        return True
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error setting up database: {error}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+# --- CREATE Operations ---
+
+def create_campaign(name, budget, start_date, end_date, description, channels):
+    """Creates a new marketing campaign and its channels."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return None
+        cur = conn.cursor()
+        query_campaign = "INSERT INTO campaigns (name, budget, start_date, end_date, description) VALUES (%s, %s, %s, %s, %s) RETURNING campaign_id;"
+        cur.execute(query_campaign, (name, budget, start_date, end_date, description))
+        campaign_id = cur.fetchone()[0]
+
+        query_channels = "INSERT INTO channels (campaign_id, type) VALUES (%s, %s);"
+        for channel in channels:
+            cur.execute(query_channels, (campaign_id, channel))
+        
+        conn.commit()
+        return campaign_id
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error creating campaign: {error}")
+        if conn: conn.rollback()
+        return None
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+def create_customer(name, email, region, purchase_date):
+    """Adds a new customer to the database."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return False
+        cur = conn.cursor()
+        query = "INSERT INTO customers (name, email, region, purchase_date) VALUES (%s, %s, %s, %s);"
+        cur.execute(query, (name, email, region, purchase_date))
+        conn.commit()
+        return True
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error creating customer: {error}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+def create_segment(name, criteria):
+    """Creates a new customer segment with a JSON-based criteria."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return False
+        cur = conn.cursor()
+        criteria_str = json.dumps(criteria)
+        query = "INSERT INTO segments (name, criteria) VALUES (%s, %s);"
+        cur.execute(query, (name, criteria_str))
+        conn.commit()
+        return True
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error creating segment: {error}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+def log_performance_data(campaign_id, emails_sent, emails_opened, clicks):
+    """Logs new performance data for a campaign."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return False
+        cur = conn.cursor()
+        query = "INSERT INTO campaign_performance (campaign_id, emails_sent, emails_opened, clicks, date_recorded) VALUES (%s, %s, %s, %s, CURRENT_DATE);"
+        cur.execute(query, (campaign_id, emails_sent, emails_opened, clicks))
+        conn.commit()
+        return True
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error logging performance data: {error}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+# --- READ Operations ---
+
+def get_all_campaigns():
+    """Fetches all campaigns with their channel types."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return pd.DataFrame()
+        query = """
+            SELECT c.campaign_id, c.name, c.budget, c.start_date, c.end_date,
+                   STRING_AGG(ch.type, ', ') AS channels
+            FROM campaigns c
+            LEFT JOIN channels ch ON c.campaign_id = ch.campaign_id
+            GROUP BY c.campaign_id
+            ORDER BY c.start_date DESC;
+        """
+        df = pd.read_sql(query, conn)
+        return df
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error fetching campaigns: {error}")
+        return pd.DataFrame()
+    finally:
+        if conn: conn.close()
+
+def get_campaign_performance(campaign_id):
+    """Fetches performance data for a specific campaign."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn: return pd.DataFrame()
+        query = "SELECT date_recorded, emails_sent, emails_opened, clicks FROM campaign_performance WHERE campaign_id = %s ORDER BY date_recorded;"
+        df = pd.read_sql(query, conn, params=(campaign_id,))
+        return df
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error fetching campaign performance: {error}")
+        return pd.DataFrame()
+    finally:
+        if conn: conn.close()
+
+def get_all_customers():
+    """Fetches all customers."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn: return pd.DataFrame()
+        query = "SELECT customer_id, name, email, region, purchase_date FROM customers ORDER BY name;"
+        df = pd.read_sql(query, conn)
+        return df
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error fetching customers: {error}")
+        return pd.DataFrame()
+    finally:
+        if conn: conn.close()
+
+def get_all_segments():
+    """Fetches all customer segments."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn: return pd.DataFrame()
+        query = "SELECT segment_id, name, criteria FROM segments ORDER BY name;"
+        df = pd.read_sql(query, conn)
+        return df
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error fetching segments: {error}")
+        return pd.DataFrame()
+    finally:
+        if conn: conn.close()
+
+def get_customers_in_segment(criteria):
+    """Dynamically filters customers based on segment criteria."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn: return pd.DataFrame()
+
+        criteria_dict = json.loads(criteria)
+        where_clauses = []
+        params = []
+
+        if 'region' in criteria_dict:
+            where_clauses.append("region = %s")
+            params.append(criteria_dict['region'])
+        if 'has_purchased_in_last_months' in criteria_dict:
+            months = criteria_dict['has_purchased_in_last_months']
+            where_clauses.append("purchase_date >= CURRENT_DATE - INTERVAL '%s months'")
+            params.append(months)
+        
+        where_str = " AND ".join(where_clauses)
+        query = f"SELECT name, email FROM customers WHERE {where_str};"
+        
+        df = pd.read_sql(query, conn, params=tuple(params))
+        return df
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error fetching segmented customers: {error}")
+        return pd.DataFrame()
+    finally:
+        if conn: conn.close()
+        
+# --- UPDATE Operations ---
+
+def update_campaign(campaign_id, name, budget, start_date, end_date, description):
+    """Updates an existing campaign's details."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return False
+        cur = conn.cursor()
+        query = "UPDATE campaigns SET name = %s, budget = %s, start_date = %s, end_date = %s, description = %s WHERE campaign_id = %s;"
+        cur.execute(query, (name, budget, start_date, end_date, description, campaign_id))
+        conn.commit()
+        return True
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error updating campaign: {error}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+# --- DELETE Operations ---
+
+def delete_campaign(campaign_id):
+    """Deletes a campaign and all associated data (cascades)."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return False
+        cur = conn.cursor()
+        query = "DELETE FROM campaigns WHERE campaign_id = %s;"
+        cur.execute(query, (campaign_id,))
+        conn.commit()
+        return True
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error deleting campaign: {error}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+# --- Business Insights ---
+
+def get_business_insights():
+    """Provides key performance insights using aggregation functions."""
+    conn, cur = None, None
+    try:
+        conn = get_db_connection()
+        if not conn: return {}
+        cur = conn.cursor()
+        
+        query = """
+            SELECT
+                COUNT(DISTINCT c.campaign_id) AS total_campaigns,
+                COUNT(DISTINCT cust.customer_id) AS total_customers,
+                SUM(cp.emails_sent) AS total_emails_sent,
+                SUM(cp.emails_opened) AS total_emails_opened,
+                SUM(cp.clicks) AS total_clicks,
+                AVG(cp.emails_opened::numeric / cp.emails_sent) AS avg_open_rate
+            FROM campaigns c
+            LEFT JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id
+            LEFT JOIN customers cust ON 1=1;
+        """
+        cur.execute(query)
+        result = cur.fetchone()
+        
+        if result:
+            col_names = [desc[0] for desc in cur.description]
+            insights = dict(zip(col_names, result))
+            
+            # Find the most successful campaign by clicks
+            query_max_clicks = """
+                SELECT c.name, SUM(cp.clicks) as total_clicks
+                FROM campaigns c
+                JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id
+                GROUP BY c.name
+                ORDER BY total_clicks DESC
+                LIMIT 1;
+            """
+            cur.execute(query_max_clicks)
+            max_clicks_result = cur.fetchone()
+            if max_clicks_result:
+                insights['most_successful_campaign'] = max_clicks_result[0]
+                insights['most_successful_campaign_clicks'] = int(max_clicks_result[1])
+            
+            return insights
+        return {}
+    except (Exception, psycopg2.Error) as error:
+        print(f"Error fetching business insights: {error}")
+        return {}
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
